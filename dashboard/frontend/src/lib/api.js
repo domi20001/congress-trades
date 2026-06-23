@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 
-const BASE = ''  // proxied via vite → localhost:8000
+const BASE = import.meta.env.PROD
+  ? 'https://congress-trades-api-znt7.onrender.com'
+  : ''
 
 export function useApi(path, params = {}) {
   const [data, setData]     = useState(null)
