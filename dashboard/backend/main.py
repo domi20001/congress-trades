@@ -1,16 +1,20 @@
 """
 Backend API – US Politiker Aktien Dashboard
 ============================================
-FastAPI-Server der die SQLite-DB liest und JSON-Endpunkte liefert.
+FastAPI-Server der PostgreSQL (Supabase) liest und JSON-Endpunkte liefert.
 
 Start:  uvicorn main:app --reload --port 8000
 """
 
-import os, sqlite3, hashlib, datetime as dt, math
+import os, hashlib, datetime as dt, math, re
 from typing import Optional
-from fastapi import FastAPI, Query
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
 import pandas as pd
+from sqlalchemy import create_engine, text
+
+load_dotenv()
 
 try:
     import yfinance as yf
@@ -27,26 +31,38 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── DB-Pfad: eine Ebene über /backend/ ───────────────────────────────────
-BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB_PATH = r"C:\Users\domi2\Desktop\trades_history.db"
+# ── Datenbankverbindung ───────────────────────────────────────────────────
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+def get_engine():
+    return create_engine(DATABASE_URL)
 
 def get_df() -> pd.DataFrame:
-    if not os.path.exists(DB_PATH):
+    try:
+        engine = get_engine()
+        with engine.connect() as con:
+            df = pd.read_sql_query(text("SELECT * FROM trades"), con)
+        for c in ["transaction_date", "disclosure_date"]:
+            df[c] = pd.to_datetime(df[c], errors="coerce")
+        df["amount_mid"] = pd.to_numeric(df.get("amount_mid"), errors="coerce")
+        return df
+    except Exception as e:
+        print(f"DB Fehler: {e}")
         return pd.DataFrame()
-    con = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("SELECT * FROM trades", con)
-    con.close()
-    for c in ["transaction_date", "disclosure_date"]:
-        df[c] = pd.to_datetime(df[c], errors="coerce")
-    df["amount_mid"] = pd.to_numeric(df.get("amount_mid"), errors="coerce")
-    return df
-
 
 def clean(n: str) -> str:
-    import re
     return re.sub(r"\s*\(\d+\)\s*$", "", str(n)).strip()
 
+@app.get("/api/debug")
+def debug():
+    try:
+        engine = get_engine()
+        with engine.connect() as con:
+            result = con.execute(text("SELECT COUNT(*) FROM trades"))
+            count = result.fetchone()[0]
+        return {"status": "ok", "count": count, "db_url_set": bool(DATABASE_URL)}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 # ── /api/summary ─────────────────────────────────────────────────────────
 @app.get("/api/summary")
@@ -198,11 +214,7 @@ def top_stocks(
 
 # ── /api/signals ──────────────────────────────────────────────────────────
 @app.get("/api/signals")
-def signals(
-    days:        int = 21,
-    min_pols:    int = 2,
-    limit:       int = 10,
-):
+def signals(days: int = 21, min_pols: int = 2, limit: int = 10):
     df = get_df()
     if df.empty:
         return []
@@ -260,15 +272,15 @@ def signals(
     for _, r in sig.iterrows():
         bv = float(r["buy_vol"]) if not math.isnan(float(r["buy_vol"])) else 0
         result.append({
-            "ticker":    r["ticker"],
-            "name":      r["asset"],
-            "score":     round(float(r["score"]), 1),
-            "n_buys":    int(r["n_buys"]),
-            "n_pols":    int(r["n_pols"]),
-            "buy_vol":   bv,
-            "accel":     int(r["accel"]),
-            "last_buy":  str(r["last_buy"].date()) if pd.notna(r["last_buy"]) else None,
-            "label":     "stark" if r["score"] >= 66 else "mittel" if r["score"] >= 33 else "schwach",
+            "ticker":   r["ticker"],
+            "name":     r["asset"],
+            "score":    round(float(r["score"]), 1),
+            "n_buys":   int(r["n_buys"]),
+            "n_pols":   int(r["n_pols"]),
+            "buy_vol":  bv,
+            "accel":    int(r["accel"]),
+            "last_buy": str(r["last_buy"].date()) if pd.notna(r["last_buy"]) else None,
+            "label":    "stark" if r["score"] >= 66 else "mittel" if r["score"] >= 33 else "schwach",
         })
     return result
 
@@ -296,7 +308,7 @@ def price_history(ticker: str, period: str = "1y"):
 def portfolio(politician: str, date_from: Optional[str] = None, date_to: Optional[str] = None):
     df = get_df()
     if df.empty:
-        return {"positions": [], "curve": []}
+        return {"positions": []}
 
     pol = df[
         (df["politician"] == politician) &
@@ -305,7 +317,7 @@ def portfolio(politician: str, date_from: Optional[str] = None, date_to: Optiona
     ].copy().sort_values("transaction_date")
 
     if pol.empty:
-        return {"positions": [], "curve": []}
+        return {"positions": []}
 
     p_start = pd.Timestamp(date_from) if date_from else pol["transaction_date"].min()
     p_end   = pd.Timestamp(date_to)   if date_to   else pd.Timestamp.today()
@@ -328,7 +340,7 @@ def portfolio(politician: str, date_from: Optional[str] = None, date_to: Optiona
 
         rendite = None
         if YF_OK:
-            hold_end  = ls if not is_open and ls else p_end
+            hold_end = ls if not is_open and ls else p_end
             eff_s = max(fb, p_start)
             eff_e = min(hold_end, p_end)
             if eff_s < eff_e:
