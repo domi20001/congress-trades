@@ -39,7 +39,7 @@ def get_engine():
     url = URL.create(
         "postgresql+psycopg2",
         username="postgres.maibxflblflhgqgamizh",
-        password="Quvcyk-5bezvo-bazxyM",
+        password="4GUa5Mu3wC7VzljE",
         host="aws-0-eu-west-1.pooler.supabase.com",
         port=5432,
         database="postgres",
