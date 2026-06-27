@@ -35,8 +35,16 @@ app.add_middleware(
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 def get_engine():
-    return create_engine(DATABASE_URL)
-
+    from sqlalchemy.engine import URL
+    url = URL.create(
+        "postgresql+psycopg2",
+        username="postgres.maibxflblflhgqgamizh",
+        password="Quvcyk-5bezvo-bazxyM",
+        host="aws-0-eu-west-1.pooler.supabase.com",
+        port=5432,
+        database="postgres",
+    )
+    return create_engine(url)
 def get_df() -> pd.DataFrame:
     try:
         engine = get_engine()
